@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from google import genai
 import os
 from dotenv import load_dotenv
 import asyncio
@@ -13,6 +14,13 @@ from db.db import PokerStatsDB
 
 # Load environment variables
 load_dotenv()
+
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    gemini_client = None
+    print("Warning: GEMINI_API_KEY not found")
 
 # Bot setup
 intents = discord.Intents.default()
@@ -741,6 +749,103 @@ async def poker_players(interaction: discord.Interaction):
             ephemeral=True
         )
 
+@bot.tree.command(name="profile", description="Get an AI-generated profile of a player")
+@app_commands.describe(player_name="Player name")
+async def poker_profile(interaction: discord.Interaction, player_name: str):
+    if not gemini_client:
+        await interaction.response.send_message(
+            "❌ AI profiles are not available. GEMINI_API_KEY not configured.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        history = db.get_player_history(player_name)
+        db.close()
+
+        if not history:
+            await interaction.followup.send(
+                f"❌ No historical data found for player: **{player_name}**\n"
+                f"Make sure the name matches a player from uploaded logs.",
+                ephemeral=True
+            )
+            return
+
+        # Build stats summary for Gemini
+        canonical_name = history['canonical_name'].split('@')[0].strip()
+
+        stats_summary = f"""
+            Player: {canonical_name}
+            Total Sessions: {history['total_sessions']}
+            Total Hands Played: {history['total_hands']}
+            Total Profit/Loss: ${history['total_profit']:.2f}
+
+            Playing Style Stats:
+            - VPIP (Voluntarily Put $ In Pot): {history['vpip']:.1f}%
+            - PFR (Pre-Flop Raise): {history['pfr']:.1f}%
+            - 3-Bet Percentage: {history.get('three_bet_pct', 0):.1f}%
+            - Aggression Factor: {history['aggression_factor']:.2f}
+            - Went To Showdown: {history['wtsd']:.1f}%
+
+            Win Rate: {history['win_rate']:.1f}% of hands won
+
+            Action Breakdown:
+            - Bets: {history['actions']['bets']}
+            - Raises: {history['actions']['raises']}
+            - Calls: {history['actions']['calls']}
+            - Checks: {history['actions']['checks']}
+            - Folds: {history['actions']['folds']}
+        """
+
+        # Create prompt for Gemini
+        prompt = f"""You are a poker bot analyzing a player's statistics. 
+        Given a player's stats, provide an entertaining and insightful player profile while remaining accurate to the stats. 
+        Reference specific numbers where relevant. The analysis can be ruthless as well if certain statistics are suboptimal. 
+
+        Here are the player's stats:
+
+        {stats_summary}
+
+        Write a witty player profile (1 paragraph, ~50 words):"""
+
+        response = gemini_client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=prompt
+        )
+        profile_text = response.text
+
+        # Build Discord response
+        response_msg = f"# 🎭 Player Profile: {canonical_name}\n\n"
+
+        # Show aliases if any
+        if len(history['all_aliases']) > 1:
+            aliases = [name.split('@')[0].strip() for name in history['all_aliases'][1:]]
+            response_msg += f"*Also known as: {', '.join(aliases)}*\n\n"
+
+        response_msg += "## 📊 Quick Stats\n"
+        response_msg += f"**Sessions:** {history['total_sessions']} | "
+        response_msg += f"**Hands:** {history['total_hands']} | "
+        response_msg += f"**Profit:** ${history['total_profit']:+.2f}\n\n"
+
+        response_msg += "## 🎪 AI Analysis\n"
+        response_msg += f"{profile_text}\n\n"
+
+        response_msg += "## 🎲 Playing Style\n```\n"
+        response_msg += f"VPIP: {history['vpip']:.1f}%  |  "
+        response_msg += f"PFR: {history['pfr']:.1f}%  |  "
+        response_msg += f"3-Bet: {history.get('three_bet_pct', 0):.1f}%  |  "
+        response_msg += f"AF: {history['aggression_factor']:.2f}\n"
+        response_msg += "```"
+
+        await interaction.followup.send(response_msg)
+
+    except Exception as e:
+        error_msg = f"❌ Error generating profile: {str(e)}"
+        print(f"Error in poker_profile: {e}")
+        await interaction.followup.send(error_msg, ephemeral=True)
 
 # ==================== RUN BOT ====================
 
