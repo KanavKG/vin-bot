@@ -46,14 +46,14 @@ async def on_ready():
     # Sync commands with Discord
     try:        
         # # Global sync
-        #synced = await bot.tree.sync()
-        #print(f'\nSynced {len(synced)} command(s) globally')
+        synced = await bot.tree.sync()
+        print(f'\nSynced {len(synced)} command(s) globally')
 
-        # use for testing
-        guild = discord.Object(id=1473097102203555901)  # Your actual server ID
-        bot.tree.copy_global_to(guild=guild)
-        synced = await bot.tree.sync(guild=guild)
-        print(f'Synced {len(synced)} command(s) to test server')
+        # for testing
+        # guild = discord.Object(id=server-id)
+        # bot.tree.copy_global_to(guild=guild)
+        # synced = await bot.tree.sync(guild=guild)
+        # print(f'Synced {len(synced)} command(s) to test server')
         
         for cmd in synced:
             print(f'  - /{cmd.name}')
@@ -263,7 +263,8 @@ class VinView(discord.ui.View):
             file = discord.File(gif_path, filename=f"thumbs-{'up' if passed else 'down'}.gif")
             result_embed.set_image(url=f"attachment://thumbs-{'up' if passed else 'down'}.gif")
             await self.message.edit(embed=result_embed, view=None)
-            await self.message.reply(file=file)
+            content = "🎉 Vin has been invoked! 🎉" if passed else None
+            await self.message.reply(content=content, file=file)
         else:
             await self.message.edit(embed=result_embed, view=None)
         
@@ -686,8 +687,7 @@ async def poker_leaderboard(interaction: discord.Interaction,
             vpip = player['vpip']
             pfr = player['pfr']
             
-            profit_sign = '+' if profit >= 0 else ''
-            response += f"{i:3}. {name:20} {profit_sign}${profit:>10.2f} {hands:>8} {vpip:>5.1f}% {pfr:>5.1f}%\n"
+            response += f"{i:3}. {name:20} ${profit:>10.2f} {hands:>8} {vpip:>5.1f}% {pfr:>5.1f}%\n"
         
         response += "```"
         
