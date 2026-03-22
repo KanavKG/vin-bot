@@ -16,15 +16,15 @@ class PlayerStats:
     """Statistics for a single player"""
     name: str
     hands_played: int = 0
-    vpip_count: int = 0  # Voluntarily Put money In Pot
-    pfr_count: int = 0   # Pre-Flop Raise
+    vpip_count: int = 0
+    pfr_count: int = 0
     three_bet_count: int = 0
+    three_bet_opportunities: int = 0
     hands_won: int = 0
     hands_shown: int = 0
     folds_preflop: int = 0
     folds_postflop: int = 0
-    
-    # Buy-ins and cash-outs (ACCURATE profit tracking)
+
     buy_ins: List[float] = field(default_factory=list)
     cash_outs: List[float] = field(default_factory=list)
     
@@ -57,7 +57,13 @@ class PlayerStats:
         if self.hands_played == 0:
             return 0.0
         return (self.pfr_count / self.hands_played) * 100
-    
+
+    def three_bet_percentage(self) -> float:
+        """3Bet% = % of opportunities where player made a 3-bet preflop"""
+        if self.three_bet_opportunities == 0:
+            return 0.0
+        return (self.three_bet_count / self.three_bet_opportunities) * 100
+
     def aggression_factor(self) -> float:
         """AF = (Bets + Raises) / Calls"""
         if self.calls == 0:
@@ -297,24 +303,28 @@ class PokerLogParser:
     
     def _process_hand(self, hand: Hand):
         """Process a completed hand and update player statistics"""
-        # Track which players were dealt in
         for player in hand.players:
             stats = self.player_stats[player]
             stats.hands_played += 1
-            
-            # Check if player is dealer (button)
             if player == hand.dealer:
                 stats.button_hands += 1
         
-        # Track VPIP and PFR
         preflop_actions_by_player = defaultdict(list)
-        for player, action, street in hand.actions:
+        preflop_action_indices = defaultdict(list)  # player -> [action_indices]
+        preflop_raises = []  # [(index, player)]
+
+        for i, (player, action, street) in enumerate(hand.actions):
             if street == "preflop":
                 preflop_actions_by_player[player].append(action)
+                preflop_action_indices[player].append(i)
+                if 'raise' in action:
+                    preflop_raises.append((i, player))
         
+        # Process preflop stats for each player
         for player in hand.players:
             stats = self.player_stats[player]
             player_pf_actions = preflop_actions_by_player.get(player, [])
+            player_pf_indices = preflop_action_indices.get(player, [])
             
             # VPIP: voluntarily put money in (not BB)
             vpip_actions = [a for a in player_pf_actions if any(x in a for x in ['call', 'raise', 'bet'])]
@@ -328,8 +338,18 @@ class PokerLogParser:
             # Preflop fold
             if any('fold' in a for a in player_pf_actions):
                 stats.folds_preflop += 1
-        
-        # Track all actions
+
+            # 3-Bet tracking
+            if preflop_raises and player_pf_indices:
+                player_first_action_idx = player_pf_indices[0]
+
+                raise_before_action = any(raise_idx < player_first_action_idx for raise_idx, _ in preflop_raises)
+
+                if raise_before_action:
+                    stats.three_bet_opportunities += 1
+                    if any('raise' in a for a in player_pf_actions):
+                        stats.three_bet_count += 1
+
         for player, action, street in hand.actions:
             stats = self.player_stats[player]
             
@@ -346,13 +366,11 @@ class PokerLogParser:
                 stats.folds += 1
                 if street != "preflop":
                     stats.folds_postflop += 1
-        
-        # Track showdowns
+
         for player in hand.showdowns:
             if player in self.player_stats:
                 self.player_stats[player].hands_shown += 1
-        
-        # Track wins
+
         for player, amount in hand.winners:
             if player in self.player_stats:
                 self.player_stats[player].hands_won += 1

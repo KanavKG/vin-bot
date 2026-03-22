@@ -124,8 +124,8 @@ class PokerStatsDB:
                 INSERT INTO player_sessions (
                     session_id, player_name, hands_played, vpip, pfr,
                     aggression_factor, wtsd, buy_ins, cash_outs, profit,
-                    hands_won, bets, raises, calls, checks, folds
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    hands_won, bets, raises, calls, checks, folds, three_bet_pct
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_id,
                 clean_name,  # Use clean nickname instead of full "name @ ID"
@@ -142,7 +142,8 @@ class PokerStatsDB:
                 stats.raises,
                 stats.calls,
                 stats.checks,
-                stats.folds
+                stats.folds,
+                stats.three_bet_percentage()
             ))
         
         self.conn.commit()
@@ -153,7 +154,7 @@ class PokerStatsDB:
         Get historical stats for a player (including aliased names)
         
         Args:
-            player_name: Player nickname (e.g., 'dhruv', 'Kaushik')
+            player_name
             
         Returns:
             Dictionary with aggregated stats and session history
@@ -194,6 +195,7 @@ class PokerStatsDB:
             vpip_weighted = sum(s['vpip'] * s['hands_played'] for s in sessions) / total_hands
             pfr_weighted = sum(s['pfr'] * s['hands_played'] for s in sessions) / total_hands
             wtsd_weighted = sum(s['wtsd'] * s['hands_played'] for s in sessions) / total_hands
+            three_bet_weighted = sum(s['three_bet_pct'] * s['hands_played'] for s in sessions if s['three_bet_pct']) / total_hands if total_hands > 0 else 0.0
         else:
             vpip_weighted = pfr_weighted = wtsd_weighted = 0.0
         
@@ -220,6 +222,7 @@ class PokerStatsDB:
             'total_cash_outs': total_cash_outs,
             'vpip': vpip_weighted,
             'pfr': pfr_weighted,
+            'three_bet_pct': three_bet_weighted,
             'aggression_factor': aggression_factor,
             'wtsd': wtsd_weighted,
             'hands_won': total_hands_won,

@@ -430,6 +430,7 @@ async def analyze_poker(interaction: discord.Interaction,
                 'vpip': stats.vpip_percentage(),
                 'pfr': stats.pfr_percentage(),
                 'af': stats.aggression_factor(),
+                'three_bet': stats.three_bet_percentage(),
                 'profit': profit,
                 'total_in': sum(stats.buy_ins),
                 'total_out': sum(stats.cash_outs)
@@ -443,7 +444,7 @@ async def analyze_poker(interaction: discord.Interaction,
         if winners:
             response += "## 🏆 Winners\n```\n"
             for p in winners:
-                response += f"{p['name']:15} +${p['profit']:7.2f}  VPIP: {p['vpip']:5.1f}%  PFR: {p['pfr']:5.1f}%  AF: {p['af']:4.2f}\n"
+                response += f"{p['name']:15} +${p['profit']:7.2f}  VPIP: {p['vpip']:5.1f}%  PFR: {p['pfr']:5.1f}% 3Bet%: {p['three_bet']:5.1f}%  AF: {p['af']:4.2f}\n"
             response += "```\n\n"
         
         # Losers
@@ -451,7 +452,7 @@ async def analyze_poker(interaction: discord.Interaction,
         if losers:
             response += "## 💸 Losers\n```\n"
             for p in losers:
-                response += f"{p['name']:15}  ${p['profit']:7.2f}  VPIP: {p['vpip']:5.1f}%  PFR: {p['pfr']:5.1f}%  AF: {p['af']:4.2f}\n"
+                response += f"{p['name']:15}  ${p['profit']:7.2f}  VPIP: {p['vpip']:5.1f}%  PFR: {p['pfr']:5.1f}% 3Bet%: {p['three_bet']:5.1f}%  AF: {p['af']:4.2f}\n"
             response += "```\n\n"
         
         # Break even
@@ -459,7 +460,7 @@ async def analyze_poker(interaction: discord.Interaction,
         if break_even:
             response += "## 🤝 Break Even\n```\n"
             for p in break_even:
-                response += f"{p['name']:15}   $0.00      VPIP: {p['vpip']:5.1f}%  PFR: {p['pfr']:5.1f}%  AF: {p['af']:4.2f}\n"
+                response += f"{p['name']:15}   $0.00      VPIP: {p['vpip']:5.1f}%  PFR: {p['pfr']:5.1f}% 3Bet%: {p['three_bet']:5.1f}%  AF: {p['af']:4.2f}\n"
             response += "```\n\n"
         
         # Summary stats
@@ -564,6 +565,7 @@ async def poker_stats(interaction: discord.Interaction, player_name: str):
         response += "## Playing Style\n```\n"
         response += f"VPIP:              {history['vpip']:.1f}%\n"
         response += f"PFR:               {history['pfr']:.1f}%\n"
+        response += f"3-Bet %:           {history['three_bet_pct']:.1f}%\n"
         response += f"Aggression Factor: {history['aggression_factor']:.2f}\n"
         response += f"WTSD:              {history['wtsd']:.1f}%\n"
         response += "```\n\n"
