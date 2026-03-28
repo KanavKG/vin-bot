@@ -37,6 +37,13 @@ sessions = {}
 # Structure: {message_id: {'votes': {user_id: 'yes'/'no'}, 'eligible_voters': set(), 'question': str}}
 polls = {}
 
+# gemini models
+models_to_try = [
+    'gemini-3-flash-preview',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-preview-tts'
+]
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} has connected to Discord!')
@@ -525,7 +532,7 @@ async def analyze_poker(interaction: discord.Interaction,
 # ==================== POKER HISTORY COMMANDS ====================
 
 @bot.tree.command(name="stats", description="View historical poker stats for a player")
-@app_commands.describe(player_name="Player name (e.g., 'dhruv' or 'Kaushik')")
+@app_commands.describe(player_name="Player name")
 async def poker_stats(interaction: discord.Interaction, player_name: str):
     """
     View historical poker statistics for a player across all sessions
@@ -801,21 +808,58 @@ async def poker_profile(interaction: discord.Interaction, player_name: str):
         """
 
         # Create prompt for Gemini
-        prompt = f"""You are a poker bot analyzing a player's statistics. 
-        Given a player's stats, provide an entertaining and insightful player profile while remaining accurate to the stats. 
-        Reference specific numbers where relevant. The analysis can be ruthless as well if certain statistics are suboptimal. 
+        prompt = f"""
+        You are a sharp, witty poker analyst profiling a player in a short-handed cash game (typically 5 to 6 players, ranging from 4 to 8).
 
-        Here are the player's stats:
+        Goal:
+        Produce an entertaining but statistically grounded player profile using the data provided.
 
+        Table Context:
+        - The game is usually 5 to 6 handed, but can be as short as 4 or as full as 8
+        - Expect wider ranges and more aggression than full-ring
+        - Adjust expectations dynamically based on player count (looser when short-handed, tighter when closer to full table)
+        - Do not mislabel standard short-handed play as loose or overly aggressive
+
+        Guidelines:
+        - Anchor observations explicitly to the provided stats
+        - Interpret what the numbers imply about playstyle
+        - Be clever, slightly ruthless, and humorous — but not nonsensical
+        - Criticize clearly if stats indicate leaks, but include praise if warranted
+        - Avoid generic statements; every claim should tie back to a stat
+        - No fluff or filler
+
+        Player stats:
         {stats_summary}
 
-        Write a witty player profile (1 paragraph, ~50 words):"""
+        Output format:
+        1. A single paragraph (~50 words) with a vivid, memorable player profile
+        2. One concise sentence of actionable advice targeting the biggest area of improvement
 
-        response = gemini_client.models.generate_content(
-            model='gemini-3-flash-preview',
-            contents=prompt
-        )
-        profile_text = response.text
+        Style reference:
+        Think poker Twitter meets professional HUD analysis — cutting, insightful, and grounded in short-handed dynamics.
+        """
+
+        profile_text = None
+
+        for model in models_to_try:
+            try:
+                response = gemini_client.models.generate_content(
+                    model=model,
+                    contents=prompt
+                )
+                profile_text = response.text
+                break
+            except Exception as e:
+                print(f"⚠️ {model} quota exceeded, trying next model...")
+                continue  # Try next model
+
+        # If all models failed
+        if not profile_text:
+            await interaction.followup.send(
+                "❌ All AI models are currently unavailable (quota exceeded). Please try again later.",
+                ephemeral=True
+            )
+            return
 
         # Build Discord response
         response_msg = f"# 🎭 Player Profile: {canonical_name}\n\n"
