@@ -12,6 +12,10 @@ import re
 from parser.parser import PokerLogParser
 from db.db import PokerStatsDB
 
+# Import PokerKit for equity calculation
+from pokerkit import Automation, NoLimitTexasHoldem
+from pokerkit.utilities import Card, HandType
+
 # Load environment variables
 load_dotenv()
 
@@ -344,6 +348,123 @@ async def vin(interaction: discord.Interaction):
     message = await interaction.original_response()
     view.message = message
 
+# ==================== EQUITY CALCULATION HELPER ====================
+
+def calculate_hand_equity(hero_cards: str, villain_cards: str, board_cards: str = "", simulations: int = 10000):
+    """
+    Calculate poker hand equity using Monte Carlo simulation
+
+    Args:
+        hero_cards: Hero's cards (e.g., "AhKh", "As Ks")
+        villain_cards: Villain's cards (e.g., "QdQc")
+        board_cards: Board cards (e.g., "Ah9h3c", "Ah 9h 3c")
+        simulations: Number of Monte Carlo simulations (default 10000)
+
+    Returns:
+        dict with win_percent, tie_percent, lose_percent
+    """
+
+    def parse_cards(card_str):
+        """Parse card string to PokerKit Card objects"""
+        # Remove spaces and split into pairs
+        card_str = card_str.replace(" ", "").upper()
+        cards = []
+
+        # Parse pairs (e.g., "AH" -> Ace of Hearts)
+        for i in range(0, len(card_str), 2):
+            if i + 1 >= len(card_str):
+                break
+            rank = card_str[i]
+            suit = card_str[i + 1]
+
+            # Convert to PokerKit format
+            rank_map = {
+                'A': 'A', 'K': 'K', 'Q': 'Q', 'J': 'J', 'T': 'T',
+                '9': '9', '8': '8', '7': '7', '6': '6', '5': '5',
+                '4': '4', '3': '3', '2': '2'
+            }
+            suit_map = {
+                'H': 'h', 'D': 'd', 'C': 'c', 'S': 's',
+                'h': 'h', 'd': 'd', 'c': 'c', 's': 's'
+            }
+
+            if rank in rank_map and suit in suit_map:
+                cards.append(Card.parse(rank_map[rank] + suit_map[suit]))
+
+        return cards
+
+    try:
+        # Parse cards
+        hero = parse_cards(hero_cards)
+        villain = parse_cards(villain_cards)
+        board = parse_cards(board_cards) if board_cards else []
+
+        if len(hero) != 2:
+            return {"error": "Hero must have exactly 2 cards"}
+        if len(villain) != 2:
+            return {"error": "Villain must have exactly 2 cards"}
+        if len(board) > 5:
+            return {"error": "Board cannot have more than 5 cards"}
+
+        # Check for duplicate cards
+        all_cards = hero + villain + board
+        if len(all_cards) != len(set(all_cards)):
+            return {"error": "Duplicate cards detected"}
+
+        # Create deck without known cards
+        deck = [card for card in Card.STANDARD_DECK if card not in all_cards]
+
+        # Monte Carlo simulation
+        hero_wins = 0
+        villain_wins = 0
+        ties = 0
+
+        import random
+
+        for _ in range(simulations):
+            # Shuffle deck
+            sim_deck = deck.copy()
+            random.shuffle(sim_deck)
+
+            # Deal remaining board cards
+            sim_board = board.copy()
+            cards_needed = 5 - len(board)
+            sim_board.extend(sim_deck[:cards_needed])
+
+            # Evaluate hands
+            hero_hand = hero + sim_board
+            villain_hand = villain + sim_board
+
+            # Get hand strengths (simple comparison)
+            from pokerkit.utilities import HandTypeAnalyzer
+            analyzer = HandTypeAnalyzer()
+
+            hero_strength = analyzer.get_hand_type(hero_hand)
+            villain_strength = analyzer.get_hand_type(villain_hand)
+
+            # Compare
+            if hero_strength > villain_strength:
+                hero_wins += 1
+            elif villain_strength > hero_strength:
+                villain_wins += 1
+            else:
+                ties += 1
+
+        # Calculate percentages
+        total = simulations
+        win_pct = (hero_wins / total) * 100
+        tie_pct = (ties / total) * 100
+        lose_pct = (villain_wins / total) * 100
+
+        return {
+            "win_percent": round(win_pct, 2),
+            "tie_percent": round(tie_pct, 2),
+            "lose_percent": round(lose_pct, 2),
+            "simulations": simulations
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # ==================== POKER ANALYSIS COMMAND ====================
 
@@ -890,6 +1011,83 @@ async def poker_profile(interaction: discord.Interaction, player_name: str):
         error_msg = f"❌ Error generating profile: {str(e)}"
         print(f"Error in poker_profile: {e}")
         await interaction.followup.send(error_msg, ephemeral=True)
+
+@bot.tree.command(name="equity", description="Calculate poker hand equity")
+@app_commands.describe(
+    hero="Your hand (e.g., AhKh or As Ks)",
+    villain="Opponent's hand (e.g., QdQc)",
+    board="Board cards - optional (e.g., Ah9h3c or Ah 9h 3c)"
+)
+async def equity(interaction: discord.Interaction, hero: str, villain: str, board: str = ""):
+    """
+    Calculate equity of hero's hand vs villain's hand
+    """
+
+    await interaction.response.defer()
+
+    try:
+        # Calculate equity
+        result = calculate_hand_equity(hero, villain, board, simulations=10000)
+
+        # Check for errors
+        if "error" in result:
+            await interaction.followup.send(
+                f"❌ Error: {result['error']}\n\n"
+                f"**Format examples:**\n"
+                f"• Hero: `AhKh` or `As Ks`\n"
+                f"• Villain: `QdQc` or `Qd Qc`\n"
+                f"• Board: `Ah9h3c` or `Ah 9h 3c` (optional)",
+                ephemeral=True
+            )
+            return
+
+        # Build response
+        response = "# 🎲 Hand Equity Calculator\n\n"
+
+        # Format cards nicely
+        hero_display = hero.upper().replace(" ", "")
+        villain_display = villain.upper().replace(" ", "")
+        board_display = board.upper().replace(" ", "") if board else "None"
+
+        response += "## 🃏 Cards\n"
+        response += f"**Hero:** {hero_display}\n"
+        response += f"**Villain:** {villain_display}\n"
+        response += f"**Board:** {board_display}\n\n"
+
+        # Visuals
+        win_pct = result['win_percent']
+        bar_length = 20
+        win_bars = int((win_pct / 100) * bar_length)
+        lose_bars = bar_length - win_bars
+
+        response += "## 📈 Visual\n```\n"
+        response += "Hero:    [" + "█" * win_bars + "░" * lose_bars + f"] {win_pct:.1f}%\n"
+        response += "Villain: [" + "░" * win_bars + "█" * lose_bars + f"] {result['lose_percent']:.1f}%\n"
+        response += f"Tie:  {result['tie_percent']:>6.2f}%\n"
+        response += "```\n\n"
+
+        # Interpretation
+        if win_pct > 70:
+            interpretation = "🔥 **Strong favorite!**"
+        elif win_pct > 55:
+            interpretation = "✅ **Ahead**"
+        elif win_pct > 45:
+            interpretation = "🤝 **Coin Flip**"
+        elif win_pct > 30:
+            interpretation = "⚠️ **Behind**"
+        else:
+            interpretation = "❌ **Cooked**"
+
+        response += interpretation + "\n\n"
+        response += f"*Based on {result['simulations']:,} Monte Carlo simulations*"
+
+        await interaction.followup.send(response)
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error calculating equity: {str(e)}",
+            ephemeral=True
+        )
 
 # ==================== RUN BOT ====================
 
