@@ -1,4 +1,4 @@
 discord.py>=2.3.0
 python-dotenv>=1.0.0
 google-genai>=0.1.0
-pokerkit>=0.5.0
+treys>=0.1.8
