@@ -400,8 +400,7 @@ def calculate_equity(hero_cards: str, villain_cards: str, board_cards: str = "",
         # Complete the board
         sim_board = board.copy()
         cards_needed = 5 - len(board)
-        for _ in range(cards_needed):
-            sim_board.append(deck.draw(1))
+        sim_board.extend(deck.draw(cards_needed))
 
         # Evaluate hands (lower score = better in treys)
         hero_score = evaluator.evaluate(sim_board, hero)
@@ -417,7 +416,8 @@ def calculate_equity(hero_cards: str, villain_cards: str, board_cards: str = "",
     return {
         'win': round((wins / iterations) * 100, 2),
         'tie': round((ties / iterations) * 100, 2),
-        'lose': round((losses / iterations) * 100, 2)
+        'lose': round((losses / iterations) * 100, 2),
+        'simulations': iterations
     }
 
 # ==================== POKER ANALYSIS COMMAND ====================
