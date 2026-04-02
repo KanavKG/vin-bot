@@ -383,6 +383,109 @@ class PokerStatsDB:
         
         return leaderboard[:limit]
     
+    def get_session_summary(self, session_id: int = None):
+        """
+        Get detailed stats for a specific session or the most recent one
+
+        Args:
+            session_id: Specific session ID, or None for most recent
+
+        Returns:
+            Dictionary with session info and player stats
+        """
+        cursor = self.conn.cursor()
+
+        if session_id:
+            # Get specific session
+            cursor.execute("""
+                SELECT 
+                    s.session_id,
+                    s.session_date,
+                    s.total_hands,
+                    s.total_players,
+                    s.uploaded_by,
+                    s.filename
+                FROM sessions s
+                WHERE s.session_id = ?
+            """, (session_id,))
+        else:
+            # Get the most recent session
+            cursor.execute("""
+                SELECT 
+                    s.session_id,
+                    s.session_date,
+                    s.total_hands,
+                    s.total_players,
+                    s.uploaded_by,
+                    s.filename
+                FROM sessions s
+                ORDER BY s.session_date DESC
+                LIMIT 1
+            """)
+
+        session = cursor.fetchone()
+
+        if not session:
+            return None
+
+        session_dict = dict(session)
+
+        # Get all player stats for this session
+        cursor.execute("""
+            SELECT 
+                player_name,
+                hands_played,
+                vpip,
+                pfr,
+                three_bet_pct,
+                aggression_factor,
+                wtsd,
+                profit,
+                buy_ins,
+                cash_outs,
+                hands_won,
+                bets,
+                raises,
+                calls,
+                checks,
+                folds
+            FROM player_sessions
+            WHERE session_id = ?
+            ORDER BY profit DESC
+        """, (session_dict['session_id'],))
+
+        players = [dict(row) for row in cursor.fetchall()]
+
+        session_dict['players'] = players
+
+        return session_dict
+
+    def list_sessions(self, limit: int = 10):
+        """
+        List recent sessions with basic info
+
+        Args:
+            limit: Number of sessions to return
+
+        Returns:
+            List of session dictionaries
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT 
+                session_id,
+                session_date,
+                total_hands,
+                total_players,
+                filename
+            FROM sessions
+            ORDER BY session_date DESC
+            LIMIT ?
+        """, (limit,))
+
+        return [dict(row) for row in cursor.fetchall()]
+
     def close(self):
         """Close database connection"""
         self.conn.close()

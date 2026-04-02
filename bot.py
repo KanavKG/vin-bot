@@ -1025,6 +1025,167 @@ async def equity(interaction: discord.Interaction, hero: str, villain: str, boar
             ephemeral=True
         )
 
+# TODO: refactor, create LLM client / helper
+@bot.tree.command(name="sessionsummary", description="Get an AI-generated summary of a poker session")
+@app_commands.describe(session_id="Session ID (optional - defaults to the latest session)")
+async def session_summary(interaction: discord.Interaction, session_id: int = None):
+    """
+    Generate an AI summary of a poker session
+
+    Parameters:
+    -----------
+    session_id: int (optional)
+        Specific session ID to summarize, or None for most recent
+    """
+
+    # Check if Gemini is configured
+    if not gemini_client:
+        await interaction.response.send_message(
+            "❌ AI summaries are not available. GEMINI_API_KEY not configured.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer()
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        session_data = db.get_session_summary(session_id)
+        db.close()
+
+        if not session_data:
+            if session_id:
+                await interaction.followup.send(
+                    f"❌ Session ID {session_id} not found in database.\n"
+                    f"Use `/sessions` to see available sessions.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "❌ No sessions found in database. Upload a poker log first with `/poker`!",
+                    ephemeral=True
+                )
+            return
+
+        # Build stats summary for Gemini
+        session_info = f"""
+            Session ID: {session_data['session_id']}
+            Session Date: {session_data['session_date']}
+            Total Hands: {session_data['total_hands']}
+            Total Players: {session_data['total_players']}
+            Uploaded by: {session_data['uploaded_by']}
+
+            Player Statistics:
+            """
+
+        for player in session_data['players']:
+            session_info += f"""
+            Player: {player['player_name']}
+            - Hands Played: {player['hands_played']}
+            - VPIP: {player['vpip']:.1f}%
+            - PFR: {player['pfr']:.1f}%
+            - 3-Bet: {player.get('three_bet_pct', 0):.1f}%
+            - Aggression Factor: {player['aggression_factor']:.2f}
+            - Went to Showdown: {player['wtsd']:.1f}%
+            - Profit/Loss: ${player['profit']:+.2f}
+            - Buy-ins: ${player['buy_ins']:.2f}
+            - Cash-outs: ${player['cash_outs']:.2f}
+            - Hands Won: {player['hands_won']}
+            - Actions: {player['bets']} bets, {player['raises']} raises, {player['calls']} calls, {player['checks']} checks, {player['folds']} folds
+
+        """
+
+        # Create prompt for Gemini
+        prompt = f"""You are a witty poker session recap narrator. Analyze this poker session and write an entertaining 3-4 paragraph summary. 
+
+        Guidelines:
+        - Start with an engaging headline about the session
+        - Highlight the big winner(s) and what made them successful
+        - Call out interesting playing styles (tight/loose/aggressive/passive)
+        - Mention notable patterns (who was the nit? who was the maniac? who got unlucky?)
+        - Include specific stats when they tell a story
+        - Keep it fun and slightly roasting but friendly
+        - Use poker terminology naturally
+
+        Session Data:
+
+        {session_info}
+
+        Write an entertaining session recap (3-4 paragraphs):"""
+
+        # Generate summary with Gemini (with fallback models)
+        summary_text = None
+        model_used = None
+
+        for model in models_to_try:
+            try:
+                response = gemini_client.models.generate_content(
+                    model=model,
+                    contents=prompt
+                )
+                summary_text = response.text
+                model_used = model
+                break
+
+            except Exception as e:
+                error_msg = str(e).lower()
+                if 'quota' in error_msg or 'rate limit' in error_msg or 'resource exhausted' in error_msg:
+                    print(f"⚠️ {model} quota exceeded, trying next model...")
+                    continue
+                else:
+                    raise
+
+        if not summary_text:
+            await interaction.followup.send(
+                "❌ All AI models are currently unavailable (quota exceeded). Please try again later.",
+                ephemeral=True
+            )
+            return
+
+        # Build Discord response
+        response_msg = f"# 🎲 Session Recap"
+        if session_id:
+            response_msg += f" (Session #{session_data['session_id']})"
+        response_msg += "\n\n"
+
+        response_msg += f"**Date:** {session_data['session_date'][:10]}\n"
+        response_msg += f"**Hands:** {session_data['total_hands']} | **Players:** {session_data['total_players']}\n\n"
+        response_msg += "---\n\n"
+        response_msg += summary_text
+        response_msg += "\n\n---\n\n"
+
+        # Add quick stats table
+        response_msg += "## 📊 Final Results\n```\n"
+        response_msg += f"{'Player':<15} {'Profit':>10} {'Hands':>7} {'VPIP':>6} {'PFR':>6}\n"
+        response_msg += "-" * 50 + "\n"
+
+        for player in session_data['players']:
+            name = player['player_name'][:14]
+            profit = player['profit']
+            hands = player['hands_played']
+            vpip = player['vpip']
+            pfr = player['pfr']
+
+            profit_sign = '+' if profit >= 0 else ''
+            response_msg += f"{name:<15} {profit_sign}${profit:>8.2f} {hands:>7} {vpip:>5.1f}% {pfr:>5.1f}%\n"
+
+        response_msg += "```"
+
+        # Model attribution (small)
+        model_display = {
+            'gemini-3-flash-preview': 'Gemini 3',
+            'gemini-2.5-flash': 'Gemini 2.5',
+            'gemini-2.5-flash-preview-tts': 'Gemini 2.5'
+        }
+        response_msg += f"\n\n*Recap by {model_display.get(model_used, model_used)}*"
+
+        await interaction.followup.send(response_msg)
+
+    except Exception as e:
+        error_msg = f"❌ Error generating summary: {str(e)}"
+        print(f"Error in session_summary: {e}")
+        await interaction.followup.send(error_msg, ephemeral=True)
+
 # ==================== RUN BOT ====================
 
 if __name__ == "__main__":
