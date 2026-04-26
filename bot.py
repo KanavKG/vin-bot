@@ -47,7 +47,7 @@ polls = {}
 models_to_try = [
     'gemini-3-flash-preview',
     'gemini-2.5-flash',
-    'gemini-2.5-flash-preview-tts'
+    'gemini-2.5-flash-lite'
 ]
 
 # helper instances
