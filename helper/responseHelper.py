@@ -102,6 +102,39 @@ class ResponseHelper:
         response += "```"
         return response
 
+    def build_big_pots_response(self, pots: List[Dict[str, Any]]) -> str:
+        response = "# 💰 Biggest Pots\n\n"
+
+        if not pots:
+            return (
+                response
+                + "No saved hand pots yet. Upload and analyze a Poker Now log first with `/analyze`."
+            )
+
+        for i, pot in enumerate(pots, 1):
+            date = (pot.get('hand_date') or pot.get('session_date') or '')[:10] or 'Unknown date'
+            hand_number = pot.get('hand_number', 'Unknown')
+            winners = pot.get('winners', [])
+
+            response += f"## {i}. ${pot.get('pot_total', 0.0):.2f} pot\n"
+            response += f"**Date:** {date}  |  **Hand:** #{hand_number}\n"
+
+            if winners:
+                winner_text = ', '.join(
+                    f"{self._clean_name(winner.get('player_name', 'Unknown'))} won ${winner.get('amount', 0.0):.2f}"
+                    for winner in winners
+                )
+                response += f"**Winner:** {winner_text}\n"
+            else:
+                response += "**Winner:** Unknown\n"
+
+            filename = pot.get('filename')
+            if filename:
+                response += f"*Source:* `{filename}`\n"
+            response += "\n"
+
+        return response.strip()
+
     def build_players_list_response(self, players: List[Dict[str, Any]]) -> str:
         response = "# 👥 Players in Database\n\n```\n"
         for i, row in enumerate(players, 1):

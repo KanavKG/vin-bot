@@ -476,6 +476,26 @@ async def analyze_poker(interaction: discord.Interaction,
             os.unlink(ledger_temp_path)
 
 
+@bot.tree.command(name="bigpots", description="Show the five biggest saved pots")
+async def big_pots(interaction: discord.Interaction):
+    """Show the largest pots from analyzed Poker Now logs."""
+    await interaction.response.defer()
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        pots = db.get_biggest_pots(limit=5)
+        db.close()
+
+        response = response_helper.build_big_pots_response(pots)
+        await interaction.followup.send(response)
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error retrieving biggest pots: {str(e)}",
+            ephemeral=True
+        )
+
+
 # ==================== POKER HISTORY COMMANDS ====================
 
 @bot.tree.command(name="stats", description="View historical poker stats for a player")

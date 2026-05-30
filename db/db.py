@@ -60,6 +60,24 @@ class PokerStatsDB:
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_hands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                hand_number INTEGER,
+                hand_id TEXT,
+                hand_date TEXT,
+                player_name TEXT NOT NULL,
+                stack REAL,
+                pot_total REAL,
+                amount_won REAL,
+                board_cards TEXT,
+                shown_cards TEXT,
+                rare_hand_type TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
         
         # Player aliases table
         cursor.execute("""
@@ -80,6 +98,10 @@ class PokerStatsDB:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_player_aliases_canonical 
             ON player_aliases(canonical_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_hands_pot
+            ON session_hands(pot_total)
         """)
         
         self.conn.commit()
@@ -145,9 +167,35 @@ class PokerStatsDB:
                 stats.folds,
                 stats.three_bet_percentage()
             ))
+
+        self._add_session_hands(cursor, session_id, parser)
         
         self.conn.commit()
         return session_id
+
+    def _add_session_hands(self, cursor, session_id: int, parser):
+        """Store normalized hand rows for session-level history features."""
+        for hand in parser.hands:
+            pot_total = hand.pot_total() if hasattr(hand, 'pot_total') else sum(amount for _, amount in hand.winners)
+            winners_by_player = {player_name: amount for player_name, amount in hand.winners}
+            players = hand.stacks.keys() or winners_by_player.keys()
+
+            for player_name in players:
+                cursor.execute("""
+                    INSERT INTO session_hands (
+                        session_id, hand_number, hand_id, hand_date, player_name,
+                        stack, pot_total, amount_won
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    session_id,
+                    hand.hand_number,
+                    hand.hand_id,
+                    hand.hand_date,
+                    player_name.split('@')[0].strip(),
+                    hand.stacks.get(player_name),
+                    pot_total,
+                    winners_by_player.get(player_name, 0.0)
+                ))
     
     def get_player_history(self, player_name: str) -> Dict:
         """
@@ -382,6 +430,48 @@ class PokerStatsDB:
         leaderboard.sort(key=lambda x: x[sort_key], reverse=True)
         
         return leaderboard[:limit]
+
+    def get_biggest_pots(self, limit: int = 5) -> List[Dict]:
+        """
+        Get the largest saved pots across all analyzed sessions.
+
+        Args:
+            limit: Number of pots to return
+
+        Returns:
+            List of pot dictionaries ordered by largest pot first
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                sh.hand_number,
+                sh.hand_id,
+                sh.hand_date,
+                sh.pot_total,
+                s.session_date,
+                s.filename
+            FROM session_hands sh
+            JOIN sessions s ON sh.session_id = s.session_id
+            WHERE sh.pot_total > 0
+            GROUP BY sh.session_id, sh.hand_number, sh.hand_id, sh.hand_date, sh.pot_total,
+                     s.session_date, s.filename
+            ORDER BY sh.pot_total DESC, s.session_date DESC, sh.hand_number DESC
+            LIMIT ?
+        """, (limit,))
+
+        rows = []
+        for row in cursor.fetchall():
+            pot = dict(row)
+            cursor.execute("""
+                SELECT player_name, amount_won AS amount
+                FROM session_hands
+                WHERE hand_id = ? AND amount_won > 0
+                ORDER BY amount_won DESC
+            """, (pot['hand_id'],))
+            pot['winners'] = [dict(winner) for winner in cursor.fetchall()]
+            rows.append(pot)
+        return rows
     
     def get_session_summary(self, session_id: int = None):
         """

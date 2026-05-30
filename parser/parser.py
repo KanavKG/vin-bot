@@ -89,11 +89,16 @@ class Hand:
     hand_number: int
     hand_id: str
     dealer: str
+    hand_date: Optional[str] = None
     players: List[str] = field(default_factory=list)
     stacks: Dict[str, float] = field(default_factory=dict)
     actions: List[Tuple[str, str, str]] = field(default_factory=list)  # (player, action, street)
     winners: List[Tuple[str, float]] = field(default_factory=list)
     showdowns: Dict[str, str] = field(default_factory=dict)  # player -> cards shown
+
+    def pot_total(self) -> float:
+        """Total amount collected by winners for this hand."""
+        return sum(amount for _, amount in self.winners)
 
 
 class PokerLogParser:
@@ -132,6 +137,14 @@ class PokerLogParser:
         match = re.search(r'(\d+\.?\d*)', text)
         if match:
             return float(match.group(1))
+        return None
+
+    def extract_row_date(self, row: Dict[str, str]) -> Optional[str]:
+        """Extract a timestamp from common Poker Now CSV date columns."""
+        for key in ('at', 'created_at', 'timestamp', 'time', 'date'):
+            value = row.get(key)
+            if value:
+                return value
         return None
     
     def parse_log(self):
@@ -178,7 +191,8 @@ class PokerLogParser:
                         current_hand = Hand(
                             hand_number=hand_num,
                             hand_id=hand_id,
-                            dealer=dealer
+                            dealer=dealer,
+                            hand_date=self.extract_row_date(row)
                         )
                         current_street = "preflop"
                         self.hands.append(current_hand)
