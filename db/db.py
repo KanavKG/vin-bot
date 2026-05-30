@@ -463,6 +463,95 @@ class PokerStatsDB:
             'sessions': sessions
         }
 
+    def get_leaderboard_profit_history(self, limit: int = None) -> Optional[Dict]:
+        """
+        Get chronological per-session profit history for all players.
+
+        Args:
+            limit: Optional number of top players by total profit to include
+
+        Returns:
+            Dictionary with global session rows and per-player profit histories
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT session_id, session_date, filename
+            FROM sessions
+            ORDER BY session_date ASC, session_id ASC
+        """)
+        sessions = [dict(row) for row in cursor.fetchall()]
+        if not sessions:
+            return None
+
+        cursor.execute("""
+            SELECT DISTINCT player_name
+            FROM player_sessions
+        """)
+        player_names = [row['player_name'] for row in cursor.fetchall()]
+        if not player_names:
+            return None
+
+        canonical_by_name = {
+            player_name: self.get_all_player_names(player_name)[0]
+            for player_name in player_names
+        }
+
+        cursor.execute("""
+            SELECT
+                ps.player_name,
+                ps.profit,
+                ps.buy_ins,
+                ps.cash_outs,
+                ps.hands_played,
+                s.session_id,
+                s.session_date,
+                s.filename
+            FROM player_sessions ps
+            JOIN sessions s ON ps.session_id = s.session_id
+            ORDER BY s.session_date ASC, s.session_id ASC, ps.player_name ASC
+        """)
+
+        players_by_name = {}
+        sessions_by_player = {}
+        for row in cursor.fetchall():
+            canonical_name = canonical_by_name.get(row['player_name'], row['player_name'])
+            players_by_name.setdefault(canonical_name, {
+                'canonical_name': canonical_name,
+                'total_profit': 0.0,
+                'sessions': []
+            })
+
+            row_dict = dict(row)
+            session_key = (canonical_name, row_dict['session_id'])
+            if session_key in sessions_by_player:
+                existing = sessions_by_player[session_key]
+                existing['profit'] += row_dict.get('profit') or 0.0
+                existing['buy_ins'] += row_dict.get('buy_ins') or 0.0
+                existing['cash_outs'] += row_dict.get('cash_outs') or 0.0
+                existing['hands_played'] += row_dict.get('hands_played') or 0
+            else:
+                row_dict['profit'] = row_dict.get('profit') or 0.0
+                row_dict['buy_ins'] = row_dict.get('buy_ins') or 0.0
+                row_dict['cash_outs'] = row_dict.get('cash_outs') or 0.0
+                row_dict['hands_played'] = row_dict.get('hands_played') or 0
+                players_by_name[canonical_name]['sessions'].append(row_dict)
+                sessions_by_player[session_key] = row_dict
+
+            players_by_name[canonical_name]['total_profit'] += row_dict.get('profit') or 0.0
+
+        players = sorted(
+            players_by_name.values(),
+            key=lambda player: player['total_profit'],
+            reverse=True
+        )
+        if limit:
+            players = players[:limit]
+
+        return {
+            'sessions': sessions,
+            'players': players
+        }
+
     def get_session_stack_history(self, session_id: int = None):
         """
         Get per-hand stack snapshots for a specific session or the latest one.

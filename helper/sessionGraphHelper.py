@@ -144,6 +144,82 @@ class SessionGraphHelper:
         buffer.seek(0)
         return buffer
 
+    def render_leaderboard_profit_graph(self, history: Dict[str, Any]) -> BytesIO:
+        sessions = history.get("sessions", [])
+        players = history.get("players", [])
+        if not sessions or not players:
+            raise ValueError("No saved player sessions found.")
+
+        session_positions = {
+            session["session_id"]: index + 1
+            for index, session in enumerate(sessions)
+        }
+
+        fig, ax = plt.subplots(figsize=(12.5, 7), dpi=160)
+        fig.patch.set_facecolor("#ffffff")
+        ax.set_facecolor("#ffffff")
+
+        colors = plt.get_cmap("tab20").colors
+        for index, player in enumerate(players):
+            player_sessions = player.get("sessions", [])
+            x_values = [
+                session_positions[session["session_id"]]
+                for session in player_sessions
+                if session.get("session_id") in session_positions
+            ]
+            y_values = [float(session.get("profit") or 0.0) for session in player_sessions]
+            if not x_values:
+                continue
+
+            ax.plot(
+                x_values,
+                y_values,
+                color=colors[index % len(colors)],
+                linewidth=1.8,
+                marker="o",
+                markersize=4,
+                label=self._leaderboard_label(player),
+                alpha=0.9,
+            )
+
+        ax.axhline(0, color="#0f172a", linewidth=1.0, alpha=0.7)
+        ax.set_title("Leaderboard P/L Over Time", fontsize=18, fontweight="bold", pad=16)
+        ax.set_xlabel("Session", fontsize=12, labelpad=10)
+        ax.set_ylabel("Profit / Loss", fontsize=12, labelpad=10)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.yaxis.set_major_formatter(FuncFormatter(self._format_dollars))
+        ax.grid(axis="y", color="#d6dde5", linewidth=0.8, alpha=0.8)
+        ax.grid(axis="x", color="#eef2f6", linewidth=0.6, alpha=0.7)
+
+        tick_indexes = self._tick_indexes(len(sessions))
+        ax.set_xticks([index + 1 for index in tick_indexes])
+        ax.set_xticklabels(
+            [self._session_label(sessions[index]) for index in tick_indexes],
+            rotation=35,
+            ha="right",
+        )
+
+        for spine in ["top", "right"]:
+            ax.spines[spine].set_visible(False)
+        for spine in ["left", "bottom"]:
+            ax.spines[spine].set_color("#9aa6b2")
+
+        ax.tick_params(colors="#334155")
+        legend_columns = 1 if len(players) <= 12 else 2
+        ax.legend(
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            fontsize=8.5,
+            ncol=legend_columns,
+        )
+
+        buffer = BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buffer.seek(0)
+        return buffer
+
     def _players_in_first_seen_order(self, hands: List[Any]) -> List[str]:
         players: Dict[str, None] = {}
         for hand in hands:
@@ -169,6 +245,11 @@ class SessionGraphHelper:
         if session_date:
             return session_date[:10]
         return f"#{session.get('session_id', '')}"
+
+    def _leaderboard_label(self, player: Dict[str, Any]) -> str:
+        name = self._clean_name(player.get("canonical_name", "Unknown"))
+        total = self._format_dollars(float(player.get("total_profit") or 0.0))
+        return f"{name} ({total})"
 
     def _format_dollars(self, value: float, _position: Any = None) -> str:
         if value < 0:

@@ -549,6 +549,46 @@ async def profit_graph(interaction: discord.Interaction, player_name: str):
         )
 
 
+@bot.tree.command(name="leaderboardgraph", description="Graph all players' session P/L history")
+@app_commands.describe(limit="Number of top players to show (optional - defaults to all)")
+async def leaderboard_graph(interaction: discord.Interaction, limit: int = None):
+    """Return a PNG chart of every player's profit/loss across saved sessions."""
+
+    await interaction.response.defer()
+
+    if limit is not None and limit <= 0:
+        await interaction.followup.send(
+            "❌ Limit must be greater than 0.",
+            ephemeral=True
+        )
+        return
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        history = db.get_leaderboard_profit_history(limit=limit)
+        db.close()
+
+        if not history:
+            await interaction.followup.send(
+                "❌ No historical data found. Upload poker logs with `/analyze` first.",
+                ephemeral=True
+            )
+            return
+
+        image = session_graph_helper.render_leaderboard_profit_graph(history)
+        player_count = len(history.get("players", []))
+        await interaction.followup.send(
+            f"📈 Leaderboard P/L history for **{player_count}** players",
+            file=discord.File(image, filename="leaderboard-graph.png")
+        )
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error generating leaderboard graph: {str(e)}",
+            ephemeral=True
+        )
+
+
 # ==================== POKER HISTORY COMMANDS ====================
 
 @bot.tree.command(name="stats", description="View historical poker stats for a player")
