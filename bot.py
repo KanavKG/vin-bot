@@ -15,6 +15,7 @@ from db.db import PokerStatsDB
 from helper.llmHelper import LLMHelper, LLMHelperError
 from helper.equityHelper import EquityHelper
 from helper.responseHelper import ResponseHelper
+from helper.sessionGraphHelper import SessionGraphHelper
 
 from treys import Card, Evaluator, Deck
 
@@ -54,6 +55,7 @@ models_to_try = [
 llm_helper = LLMHelper(gemini_client, models_to_try)
 equity_helper = EquityHelper()
 response_helper = ResponseHelper()
+session_graph_helper = SessionGraphHelper()
 
 @bot.event
 async def on_ready():
@@ -474,6 +476,77 @@ async def analyze_poker(interaction: discord.Interaction,
             os.unlink(log_temp_path)
         if 'ledger_temp_path' in locals() and os.path.exists(ledger_temp_path):
             os.unlink(ledger_temp_path)
+
+
+@bot.tree.command(name="sessiongraph", description="Graph player stack progression for a saved session")
+@app_commands.describe(session_id="Session ID (optional - defaults to the latest session)")
+async def session_graph(interaction: discord.Interaction, session_id: int = None):
+    """Return a PNG chart of player stack sizes over hands in a saved session."""
+    await interaction.response.defer()
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        session_data = db.get_session_stack_history(session_id)
+        db.close()
+
+        if not session_data:
+            if session_id:
+                await interaction.followup.send(
+                    f"❌ Session ID {session_id} not found in database.\n"
+                    f"Use `/sessions` to see available sessions.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "❌ No sessions found in database. Upload a poker log with `/analyze` first.",
+                    ephemeral=True
+                )
+            return
+
+        image = session_graph_helper.render_stack_graph(session_data)
+        await interaction.followup.send(
+            f"📈 Stack progression for session #{session_data['session_id']}",
+            file=discord.File(image, filename="sessiongraph.png")
+        )
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error generating session graph: {str(e)}",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="graph", description="Graph a player's session P/L history")
+@app_commands.describe(player_name="Player name")
+async def profit_graph(interaction: discord.Interaction, player_name: str):
+    """Return a PNG chart of a player's profit/loss across saved sessions."""
+
+    await interaction.response.defer()
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        history = db.get_player_profit_history(player_name)
+        db.close()
+
+        if not history:
+            await interaction.followup.send(
+                f"❌ No historical data found for player: **{player_name}**\n"
+                f"Upload poker logs with `/analyze` first.",
+                ephemeral=True
+            )
+            return
+
+        image = session_graph_helper.render_player_profit_graph(history)
+        await interaction.followup.send(
+            f"📈 P/L history for **{history['canonical_name']}**",
+            file=discord.File(image, filename="profit-graph.png")
+        )
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error generating P/L graph: {str(e)}",
+            ephemeral=True
+        )
 
 
 # ==================== POKER HISTORY COMMANDS ====================

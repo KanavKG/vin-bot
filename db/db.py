@@ -71,6 +71,23 @@ class PokerStatsDB:
                 UNIQUE(alias)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_hands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                hand_number INTEGER,
+                hand_id TEXT,
+                player_name TEXT NOT NULL,
+                stack REAL,
+                pot_total REAL,
+                amount_won REAL,
+                board_cards TEXT,
+                shown_cards TEXT,
+                rare_hand_type TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
         
         # Create indexes for faster queries
         cursor.execute("""
@@ -80,6 +97,10 @@ class PokerStatsDB:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_player_aliases_canonical 
             ON player_aliases(canonical_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_hands_session
+            ON session_hands(session_id, hand_number)
         """)
         
         self.conn.commit()
@@ -145,9 +166,27 @@ class PokerStatsDB:
                 stats.folds,
                 stats.three_bet_percentage()
             ))
+
+        self._add_session_hands(cursor, session_id, parser)
         
         self.conn.commit()
         return session_id
+
+    def _add_session_hands(self, cursor, session_id: int, parser):
+        """Store normalized hand rows for session-level history features."""
+        for hand in parser.hands:
+            for player_name, stack in hand.stacks.items():
+                cursor.execute("""
+                    INSERT INTO session_hands (
+                        session_id, hand_number, hand_id, player_name, stack
+                    ) VALUES (?, ?, ?, ?, ?)
+                """, (
+                    session_id,
+                    hand.hand_number,
+                    hand.hand_id,
+                    player_name.split('@')[0].strip(),
+                    stack
+                ))
     
     def get_player_history(self, player_name: str) -> Dict:
         """
@@ -382,6 +421,108 @@ class PokerStatsDB:
         leaderboard.sort(key=lambda x: x[sort_key], reverse=True)
         
         return leaderboard[:limit]
+
+    def get_player_profit_history(self, player_name: str) -> Optional[Dict]:
+        """
+        Get per-session profit history for a player, including aliases.
+
+        Args:
+            player_name: Any player name or alias
+
+        Returns:
+            Dictionary with chronological session profit rows
+        """
+        all_names = self.get_all_player_names(player_name)
+        cursor = self.conn.cursor()
+        placeholders = ','.join('?' * len(all_names))
+
+        cursor.execute(f"""
+            SELECT
+                ps.player_name,
+                ps.profit,
+                ps.buy_ins,
+                ps.cash_outs,
+                ps.hands_played,
+                s.session_id,
+                s.session_date,
+                s.filename
+            FROM player_sessions ps
+            JOIN sessions s ON ps.session_id = s.session_id
+            WHERE ps.player_name IN ({placeholders})
+            ORDER BY s.session_date ASC, s.session_id ASC
+        """, all_names)
+
+        sessions = [dict(row) for row in cursor.fetchall()]
+        if not sessions:
+            return None
+
+        return {
+            'canonical_name': all_names[0] if all_names else player_name,
+            'all_aliases': all_names,
+            'total_profit': sum(session.get('profit') or 0.0 for session in sessions),
+            'sessions': sessions
+        }
+
+    def get_session_stack_history(self, session_id: int = None):
+        """
+        Get per-hand stack snapshots for a specific session or the latest one.
+
+        Args:
+            session_id: Specific session ID, or None for most recent
+
+        Returns:
+            Dictionary with session info and hand stack snapshots
+        """
+        cursor = self.conn.cursor()
+
+        if session_id:
+            cursor.execute("""
+                SELECT
+                    session_id,
+                    session_date,
+                    total_hands,
+                    total_players,
+                    filename
+                FROM sessions
+                WHERE session_id = ?
+            """, (session_id,))
+        else:
+            cursor.execute("""
+                SELECT
+                    session_id,
+                    session_date,
+                    total_hands,
+                    total_players,
+                    filename
+                FROM sessions
+                ORDER BY session_date DESC
+                LIMIT 1
+            """)
+
+        session = cursor.fetchone()
+        if not session:
+            return None
+
+        session_dict = dict(session)
+        cursor.execute("""
+            SELECT hand_number, hand_id, player_name, stack
+            FROM session_hands
+            WHERE session_id = ?
+            ORDER BY hand_number, player_name
+        """, (session_dict['session_id'],))
+
+        hands_by_number = {}
+        for row in cursor.fetchall():
+            hand_number = row['hand_number']
+            hands_by_number.setdefault(hand_number, {
+                'hand_number': hand_number,
+                'hand_id': row['hand_id'],
+                'stacks': {}
+            })
+            hands_by_number[hand_number]['stacks'][row['player_name']] = row['stack']
+
+        session_dict['hands'] = list(hands_by_number.values())
+        return session_dict
     
     def get_session_summary(self, session_id: int = None):
         """
