@@ -57,6 +57,7 @@ class PokerStatsDB:
                 calls INTEGER,
                 checks INTEGER,
                 folds INTEGER,
+                three_bet_pct REAL,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
@@ -81,8 +82,16 @@ class PokerStatsDB:
             CREATE INDEX IF NOT EXISTS idx_player_aliases_canonical 
             ON player_aliases(canonical_name)
         """)
+        self._ensure_column(cursor, 'player_sessions', 'three_bet_pct', 'REAL')
         
         self.conn.commit()
+
+    def _ensure_column(self, cursor, table_name: str, column_name: str, column_type: str):
+        """Add a column when upgrading an existing SQLite database."""
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        existing_columns = {row['name'] for row in cursor.fetchall()}
+        if column_name not in existing_columns:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
     
     def add_session(self, parser, discord_message_id: str = None, 
                    uploaded_by: str = None, filename: str = None) -> int:
