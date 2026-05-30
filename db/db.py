@@ -71,6 +71,23 @@ class PokerStatsDB:
                 UNIQUE(alias)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_hands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                hand_number INTEGER,
+                hand_id TEXT,
+                hand_date TEXT,
+                player_name TEXT NOT NULL,
+                stack REAL,
+                pot_total REAL,
+                amount_won REAL,
+                board_cards TEXT,
+                shown_cards TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
         
         # Create indexes for faster queries
         cursor.execute("""
@@ -80,6 +97,10 @@ class PokerStatsDB:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_player_aliases_canonical 
             ON player_aliases(canonical_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_hands_session
+            ON session_hands(session_id, hand_number)
         """)
         
         self.conn.commit()
@@ -145,9 +166,36 @@ class PokerStatsDB:
                 stats.folds,
                 stats.three_bet_percentage()
             ))
+
+        self._add_session_hands(cursor, session_id, parser)
         
         self.conn.commit()
         return session_id
+
+    def _add_session_hands(self, cursor, session_id: int, parser):
+        """Store normalized hand rows for hand-level history features."""
+        for hand in parser.hands:
+            winners_by_player = {player_name: amount for player_name, amount in hand.winners}
+            player_names = set(hand.stacks) | set(winners_by_player) | set(hand.shown_cards)
+
+            for player_name in player_names:
+                cursor.execute("""
+                    INSERT INTO session_hands (
+                        session_id, hand_number, hand_id, hand_date, player_name,
+                        stack, pot_total, amount_won, board_cards, shown_cards
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    session_id,
+                    hand.hand_number,
+                    hand.hand_id,
+                    hand.hand_date,
+                    player_name.split('@')[0].strip(),
+                    hand.stacks.get(player_name),
+                    hand.pot_total(),
+                    winners_by_player.get(player_name, 0.0),
+                    ' '.join(hand.board_cards),
+                    ' '.join(hand.shown_cards.get(player_name, []))
+                ))
     
     def get_player_history(self, player_name: str) -> Dict:
         """
