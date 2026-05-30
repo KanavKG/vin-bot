@@ -7,6 +7,7 @@ import csv
 import re
 from collections import defaultdict
 from datetime import datetime
+from itertools import combinations
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
 
@@ -89,11 +90,38 @@ class Hand:
     hand_number: int
     hand_id: str
     dealer: str
+    hand_date: Optional[str] = None
     players: List[str] = field(default_factory=list)
     stacks: Dict[str, float] = field(default_factory=dict)
     actions: List[Tuple[str, str, str]] = field(default_factory=list)  # (player, action, street)
     winners: List[Tuple[str, float]] = field(default_factory=list)
     showdowns: Dict[str, str] = field(default_factory=dict)  # player -> cards shown
+    board_cards: List[str] = field(default_factory=list)
+    shown_cards: Dict[str, List[str]] = field(default_factory=dict)
+
+    def amount_won_by(self, player_name: str) -> float:
+        """Amount collected by a player in this hand."""
+        return sum(amount for winner, amount in self.winners if winner == player_name)
+
+    def rare_hand_results(self) -> List[Dict[str, object]]:
+        """Return visible rare winning hands for this hand."""
+        results = []
+        for player_name, player_cards in self.shown_cards.items():
+            amount_won = self.amount_won_by(player_name)
+            if amount_won <= 0:
+                continue
+
+            hand_type = best_rare_hand_type(player_cards + self.board_cards)
+            if not hand_type:
+                continue
+
+            results.append({
+                'player_name': player_name,
+                'hand_type': hand_type,
+                'amount_won': amount_won,
+                'cards': ' '.join(player_cards + self.board_cards)
+            })
+        return results
 
 
 class PokerLogParser:
@@ -133,6 +161,28 @@ class PokerLogParser:
         if match:
             return float(match.group(1))
         return None
+
+    def extract_row_date(self, row: Dict[str, str]) -> Optional[str]:
+        """Extract a timestamp from common Poker Now CSV date columns."""
+        for key in ('at', 'created_at', 'timestamp', 'time', 'date'):
+            value = row.get(key)
+            if value:
+                return value
+        return None
+
+    def extract_cards(self, text: str) -> List[str]:
+        """Extract cards from text in formats like Ah, A♥, 10s, or T♠."""
+        suit_map = {
+            'c': 'c', '♣': 'c',
+            'd': 'd', '♦': 'd',
+            'h': 'h', '♥': 'h',
+            's': 's', '♠': 's',
+        }
+        cards = []
+        for rank, suit in re.findall(r'(10|[2-9TJQKA])\s*([cdhs♣♦♥♠])', text, flags=re.IGNORECASE):
+            normalized_rank = 'T' if rank == '10' else rank.upper()
+            cards.append(normalized_rank + suit_map[suit.lower()])
+        return cards
     
     def parse_log(self):
         """Parse the entire log file"""
@@ -178,7 +228,8 @@ class PokerLogParser:
                         current_hand = Hand(
                             hand_number=hand_num,
                             hand_id=hand_id,
-                            dealer=dealer
+                            dealer=dealer,
+                            hand_date=self.extract_row_date(row)
                         )
                         current_street = "preflop"
                         self.hands.append(current_hand)
@@ -199,10 +250,16 @@ class PokerLogParser:
                 # Street changes
                 elif 'Flop:' in entry:
                     current_street = "flop"
+                    if current_hand:
+                        current_hand.board_cards.extend(self.extract_cards(entry))
                 elif 'Turn:' in entry:
                     current_street = "turn"
+                    if current_hand:
+                        current_hand.board_cards.extend(self.extract_cards(entry))
                 elif 'River:' in entry:
                     current_street = "river"
+                    if current_hand:
+                        current_hand.board_cards.extend(self.extract_cards(entry))
                 
                 # Player actions and events
                 else:
@@ -277,6 +334,9 @@ class PokerLogParser:
                                 cards_match = re.search(r'shows a ([^.]+)', entry)
                                 if cards_match:
                                     current_hand.showdowns[player_name] = cards_match.group(1)
+                                cards = self.extract_cards(entry)
+                                if cards:
+                                    current_hand.shown_cards[player_name] = cards
                             
                             # Collected pot
                             elif ' collected ' in entry:
@@ -440,6 +500,60 @@ class PokerLogParser:
         print(f"  Checks: {summary['stats']['checks']}")
         print(f"  Folds: {summary['stats']['folds']} (PF: {summary['stats']['folds_preflop']}, Postflop: {summary['stats']['folds_postflop']})")
         print(f"{'='*60}\n")
+
+
+RANK_VALUES = {
+    '2': 2,
+    '3': 3,
+    '4': 4,
+    '5': 5,
+    '6': 6,
+    '7': 7,
+    '8': 8,
+    '9': 9,
+    'T': 10,
+    'J': 11,
+    'Q': 12,
+    'K': 13,
+    'A': 14,
+}
+
+
+def best_rare_hand_type(cards: List[str]) -> Optional[str]:
+    """Return the strongest rare hand type visible in the provided cards."""
+    if len(cards) < 5:
+        return None
+
+    best = None
+    for combo in combinations(cards, 5):
+        ranks = [card[0] for card in combo]
+        suits = [card[1] for card in combo]
+        values = [RANK_VALUES[rank] for rank in ranks]
+
+        is_flush = len(set(suits)) == 1
+        is_straight = _is_straight(values)
+        is_royal = is_flush and set(values) == {10, 11, 12, 13, 14}
+        is_quads = any(ranks.count(rank) == 4 for rank in set(ranks))
+
+        if is_royal:
+            return 'royal'
+        if is_flush and is_straight:
+            best = 'straightflush'
+        elif is_quads and best != 'straightflush':
+            best = 'quads'
+
+    return best
+
+
+def _is_straight(values: List[int]) -> bool:
+    unique_values = set(values)
+    if 14 in unique_values:
+        unique_values.add(1)
+
+    return any(
+        set(range(start, start + 5)).issubset(unique_values)
+        for start in range(1, 11)
+    )
 
 
 def main():

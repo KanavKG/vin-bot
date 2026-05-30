@@ -476,6 +476,39 @@ async def analyze_poker(interaction: discord.Interaction,
             os.unlink(ledger_temp_path)
 
 
+async def send_rare_hands(interaction: discord.Interaction, hand_type: str, title: str):
+    await interaction.response.defer()
+
+    try:
+        db = PokerStatsDB("poker_stats.db")
+        hands = db.get_rare_hands(hand_type, limit=10)
+        db.close()
+
+        response = response_helper.build_rare_hands_response(hands, title)
+        await interaction.followup.send(response)
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error retrieving {title.lower()}: {str(e)}",
+            ephemeral=True
+        )
+
+
+@bot.tree.command(name="quads", description="Show saved four-of-a-kind hands")
+async def quads(interaction: discord.Interaction):
+    await send_rare_hands(interaction, 'quads', '🧱 Quads History')
+
+
+@bot.tree.command(name="royal", description="Show saved royal flush hands")
+async def royal(interaction: discord.Interaction):
+    await send_rare_hands(interaction, 'royal', '👑 Royal Flush History')
+
+
+@bot.tree.command(name="straightflush", description="Show saved straight flush hands")
+async def straight_flush(interaction: discord.Interaction):
+    await send_rare_hands(interaction, 'straightflush', '🌈 Straight Flush History')
+
+
 # ==================== POKER HISTORY COMMANDS ====================
 
 @bot.tree.command(name="stats", description="View historical poker stats for a player")

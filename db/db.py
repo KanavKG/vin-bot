@@ -60,6 +60,24 @@ class PokerStatsDB:
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS session_hands (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                hand_number INTEGER,
+                hand_id TEXT,
+                hand_date TEXT,
+                player_name TEXT NOT NULL,
+                stack REAL,
+                pot_total REAL,
+                amount_won REAL,
+                board_cards TEXT,
+                shown_cards TEXT,
+                rare_hand_type TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
         
         # Player aliases table
         cursor.execute("""
@@ -80,6 +98,10 @@ class PokerStatsDB:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_player_aliases_canonical 
             ON player_aliases(canonical_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_session_hands_rare_type
+            ON session_hands(rare_hand_type)
         """)
         
         self.conn.commit()
@@ -145,9 +167,43 @@ class PokerStatsDB:
                 stats.folds,
                 stats.three_bet_percentage()
             ))
+
+        self._add_session_hands(cursor, session_id, parser)
         
         self.conn.commit()
         return session_id
+
+    def _add_session_hands(self, cursor, session_id: int, parser):
+        """Store normalized hand rows for session-level history features."""
+        for hand in parser.hands:
+            rare_results = {
+                result['player_name']: result
+                for result in hand.rare_hand_results()
+            }
+            winners_by_player = {player_name: amount for player_name, amount in hand.winners}
+            pot_total = hand.pot_total() if hasattr(hand, 'pot_total') else sum(winners_by_player.values())
+            players = hand.stacks.keys() or set(winners_by_player) | set(hand.shown_cards)
+
+            for player_name in players:
+                rare_result = rare_results.get(player_name, {})
+                cursor.execute("""
+                    INSERT INTO session_hands (
+                        session_id, hand_number, hand_id, hand_date, player_name,
+                        stack, pot_total, amount_won, board_cards, shown_cards, rare_hand_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    session_id,
+                    hand.hand_number,
+                    hand.hand_id,
+                    hand.hand_date,
+                    player_name.split('@')[0].strip(),
+                    hand.stacks.get(player_name),
+                    pot_total,
+                    winners_by_player.get(player_name, 0.0),
+                    ' '.join(hand.board_cards),
+                    ' '.join(hand.shown_cards.get(player_name, [])),
+                    rare_result.get('hand_type')
+                ))
     
     def get_player_history(self, player_name: str) -> Dict:
         """
@@ -382,6 +438,39 @@ class PokerStatsDB:
         leaderboard.sort(key=lambda x: x[sort_key], reverse=True)
         
         return leaderboard[:limit]
+
+    def get_rare_hands(self, hand_type: str, limit: int = 10) -> List[Dict]:
+        """
+        Get visible rare winning hands from saved sessions.
+
+        Args:
+            hand_type: 'quads', 'royal', or 'straightflush'
+            limit: Maximum results to return
+
+        Returns:
+            List of rare hand dictionaries, newest first
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                sh.player_name,
+                sh.rare_hand_type as hand_type,
+                TRIM(COALESCE(sh.shown_cards, '') || ' ' || COALESCE(sh.board_cards, '')) as cards,
+                sh.amount_won,
+                sh.hand_number,
+                sh.hand_id,
+                sh.hand_date,
+                s.session_date,
+                s.filename
+            FROM session_hands sh
+            JOIN sessions s ON sh.session_id = s.session_id
+            WHERE sh.rare_hand_type = ?
+            ORDER BY COALESCE(sh.hand_date, s.session_date) DESC, sh.hand_number DESC
+            LIMIT ?
+        """, (hand_type, limit))
+
+        return [dict(row) for row in cursor.fetchall()]
     
     def get_session_summary(self, session_id: int = None):
         """

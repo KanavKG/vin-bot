@@ -102,6 +102,31 @@ class ResponseHelper:
         response += "```"
         return response
 
+    def build_rare_hands_response(self, hands: List[Dict[str, Any]], title: str) -> str:
+        response = f"# {title}\n\n"
+
+        if not hands:
+            return (
+                response
+                + "No saved hands found yet. Upload and analyze Poker Now logs first with `/analyze`."
+            )
+
+        response += "```\n"
+        response += f"{'Date':10} {'Player':18} {'Won':>10} {'Hand':>8}  Cards\n"
+        response += "=" * 68 + "\n"
+
+        for hand in hands:
+            date = (hand.get('hand_date') or hand.get('session_date') or '')[:10] or 'Unknown'
+            player = self._clean_name(hand.get('player_name', 'Unknown'))[:18]
+            amount_won = hand.get('amount_won', 0.0)
+            hand_number = hand.get('hand_number', '')
+            cards = hand.get('cards', '')
+
+            response += f"{date:10} {player:18} ${amount_won:>8.2f} {str(hand_number):>8}  {cards}\n"
+
+        response += "```"
+        return response
+
     def build_players_list_response(self, players: List[Dict[str, Any]]) -> str:
         response = "# 👥 Players in Database\n\n```\n"
         for i, row in enumerate(players, 1):
