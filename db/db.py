@@ -57,6 +57,7 @@ class PokerStatsDB:
                 calls INTEGER,
                 checks INTEGER,
                 folds INTEGER,
+                three_bet_pct REAL,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
