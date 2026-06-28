@@ -89,11 +89,18 @@ class Hand:
     hand_number: int
     hand_id: str
     dealer: str
+    hand_date: Optional[str] = None
     players: List[str] = field(default_factory=list)
     stacks: Dict[str, float] = field(default_factory=dict)
     actions: List[Tuple[str, str, str]] = field(default_factory=list)  # (player, action, street)
     winners: List[Tuple[str, float]] = field(default_factory=list)
     showdowns: Dict[str, str] = field(default_factory=dict)  # player -> cards shown
+    board_cards: List[str] = field(default_factory=list)
+    shown_cards: Dict[str, List[str]] = field(default_factory=dict)
+
+    def pot_total(self) -> float:
+        """Total amount collected by winners for this hand."""
+        return sum(amount for _, amount in self.winners)
 
 
 class PokerLogParser:
@@ -133,6 +140,28 @@ class PokerLogParser:
         if match:
             return float(match.group(1))
         return None
+
+    def extract_row_date(self, row: Dict[str, str]) -> Optional[str]:
+        """Extract a timestamp from common Poker Now CSV date columns."""
+        for key in ('at', 'created_at', 'timestamp', 'time', 'date'):
+            value = row.get(key)
+            if value:
+                return value
+        return None
+
+    def extract_cards(self, text: str) -> List[str]:
+        """Extract cards from text in formats like Ah, A♥, 10s, or T♠."""
+        suit_map = {
+            'c': 'c', '♣': 'c',
+            'd': 'd', '♦': 'd',
+            'h': 'h', '♥': 'h',
+            's': 's', '♠': 's',
+        }
+        cards = []
+        for rank, suit in re.findall(r'(10|[2-9TJQKA])\s*([cdhs♣♦♥♠])', text, flags=re.IGNORECASE):
+            normalized_rank = 'T' if rank == '10' else rank.upper()
+            cards.append(normalized_rank + suit_map[suit.lower()])
+        return cards
     
     def parse_log(self):
         """Parse the entire log file"""
@@ -178,7 +207,8 @@ class PokerLogParser:
                         current_hand = Hand(
                             hand_number=hand_num,
                             hand_id=hand_id,
-                            dealer=dealer
+                            dealer=dealer,
+                            hand_date=self.extract_row_date(row)
                         )
                         current_street = "preflop"
                         self.hands.append(current_hand)
@@ -199,10 +229,16 @@ class PokerLogParser:
                 # Street changes
                 elif 'Flop:' in entry:
                     current_street = "flop"
+                    if current_hand:
+                        current_hand.board_cards.extend(self.extract_cards(entry))
                 elif 'Turn:' in entry:
                     current_street = "turn"
+                    if current_hand:
+                        current_hand.board_cards.extend(self.extract_cards(entry))
                 elif 'River:' in entry:
                     current_street = "river"
+                    if current_hand:
+                        current_hand.board_cards.extend(self.extract_cards(entry))
                 
                 # Player actions and events
                 else:
@@ -277,6 +313,9 @@ class PokerLogParser:
                                 cards_match = re.search(r'shows a ([^.]+)', entry)
                                 if cards_match:
                                     current_hand.showdowns[player_name] = cards_match.group(1)
+                                cards = self.extract_cards(entry)
+                                if cards:
+                                    current_hand.shown_cards[player_name] = cards
                             
                             # Collected pot
                             elif ' collected ' in entry:

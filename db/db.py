@@ -57,6 +57,7 @@ class PokerStatsDB:
                 calls INTEGER,
                 checks INTEGER,
                 folds INTEGER,
+                three_bet_pct REAL,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
         """)
@@ -78,6 +79,7 @@ class PokerStatsDB:
                 session_id INTEGER,
                 hand_number INTEGER,
                 hand_id TEXT,
+                hand_date TEXT,
                 player_name TEXT NOT NULL,
                 stack REAL,
                 pot_total REAL,
@@ -180,12 +182,28 @@ class PokerStatsDB:
                     INSERT INTO session_hands (
                         session_id, hand_number, hand_id, player_name, stack
                     ) VALUES (?, ?, ?, ?, ?)
+        """Store normalized hand rows for hand-level history features."""
+        for hand in parser.hands:
+            winners_by_player = {player_name: amount for player_name, amount in hand.winners}
+            player_names = set(hand.stacks) | set(winners_by_player) | set(hand.shown_cards)
+
+            for player_name in player_names:
+                cursor.execute("""
+                    INSERT INTO session_hands (
+                        session_id, hand_number, hand_id, hand_date, player_name,
+                        stack, pot_total, amount_won, board_cards, shown_cards
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     session_id,
                     hand.hand_number,
                     hand.hand_id,
+                    hand.hand_date,
                     player_name.split('@')[0].strip(),
-                    stack
+                    hand.stacks.get(player_name),
+                    hand.pot_total(),
+                    winners_by_player.get(player_name, 0.0),
+                    ' '.join(hand.board_cards),
+                    ' '.join(hand.shown_cards.get(player_name, []))
                 ))
     
     def get_player_history(self, player_name: str) -> Dict:
